@@ -16,10 +16,11 @@ services:
       - mysql_data:/var/lib/mysql
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-hwelltune", "-pwelltune_pass"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "welltune", "-pwelltune_pass"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ── API Server ──────────────────────────────────────────────────────────────
   api:
