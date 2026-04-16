@@ -249,11 +249,17 @@ function LoginView({ setToken, setView, showToast }: any) {
 }
 
 function SignupView({ setToken, setView, showToast }: any) {
-  const [f, setF] = useState({ username:"", email:"", password:"" }); const [loading, setLoading] = useState(false);
+  const [f, setF] = useState({ username:"", email:"", password:"", confirmPassword: "" }); const [loading, setLoading] = useState(false);
   async function submit() {
+    // Check if passwords match
+    if (f.password !== f.confirmPassword) {
+      showToast("Passwords do not match");
+      return;
+    }
     setLoading(true);
     try {
-      const d = await api("/auth/signup", { method: "POST", body: JSON.stringify(f) });
+      const { confirmPassword, ...payload } = f;
+      const d = await api("/auth/signup", { method: "POST", body: JSON.stringify(payload) });
       localStorage.setItem("wt_token", d.token);
       setToken(d.token);
     } catch (e: any) { showToast(e.message); }
@@ -264,6 +270,7 @@ function SignupView({ setToken, setView, showToast }: any) {
       <Input label="Username" value={f.username} onChange={(e)=>setF({...f,username:e.target.value})} placeholder="leafy_yogi"/>
       <Input label="Email" type="email" value={f.email} onChange={(e)=>setF({...f,email:e.target.value})} placeholder="you@example.com"/>
       <Input label="Password" type="password" value={f.password} onChange={(e)=>setF({...f,password:e.target.value})} placeholder="min 8 chars"/>
+      <Input label="Confirm Password" type="password" value={f.confirmPassword} onChange={(e)=>setF({...f, confirmPassword: e.target.value})} placeholder="••••••••"/>
       <Btn onClick={submit} className="w-full justify-center" disabled={loading}>{loading?"Creating…":"Create Account"}</Btn>
       <p className="text-center text-xs text-slate-500">Already have an account? <button className="text-emerald-600 font-semibold" onClick={()=>setView("login")}>Sign in</button></p>
     </AuthCard>
