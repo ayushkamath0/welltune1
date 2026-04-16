@@ -77,6 +77,8 @@ app.post("/api/auth/signup", async (req, res) => {
 // POST /api/auth/login
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: "All fields required" });
   try {
     const [[user]] = await pool.execute("SELECT * FROM users WHERE email = ?", [email]);
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
