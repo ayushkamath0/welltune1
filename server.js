@@ -22,11 +22,11 @@ app.use(express.json());
 
 // ─── DB Pool ─────────────────────────────────────────────────────────────────
 const pool = mysql.createPool({
-  host:     process.env.DB_HOST     || "localhost",
-  port:     process.env.DB_PORT     || 3306,
-  user:     process.env.DB_USER     || "welltune",
-  password: process.env.DB_PASS     || "welltune_pass",
-  database: process.env.DB_NAME     || "welltune",
+  host: process.env.DB_HOST ?? "localhost",
+  port: Number(process.env.DB_PORT ?? 3306),
+  user: process.env.DB_USER ?? "welltune",
+  password: process.env.DB_PASS ?? "",
+  database: process.env.DB_NAME ?? "welltune",
   waitForConnections: true,
   connectionLimit: 10,
 });
@@ -127,15 +127,29 @@ app.get("/api/survey", auth, async (req, res) => {
 // GET /api/playlists  — public feed (optionally filtered by category)
 app.get("/api/playlists", auth, async (req, res) => {
   const { category } = req.query;
+
   let sql = `
     SELECT p.*, u.username,
-           (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count
+           (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count,
+           (SELECT COUNT(*) FROM playlist_likes l WHERE l.playlist_id = p.id) AS like_count,
+           EXISTS(
+             SELECT 1 FROM playlist_likes l
+             WHERE l.playlist_id = p.id AND l.user_id = ?
+           ) AS liked_by_me
     FROM playlists p
     JOIN users u ON u.id = p.user_id
-    WHERE p.is_public = 1`;
-  const params = [];
-  if (category) { sql += " AND p.category = ?"; params.push(category); }
+    WHERE p.is_public = 1
+  `;
+
+  const params = [req.user.id];
+
+  if (category) {
+    sql += " AND p.category = ?";
+    params.push(category);
+  }
+
   sql += " ORDER BY p.created_at DESC LIMIT 50";
+
   const [rows] = await pool.execute(sql, params);
   res.json(rows);
 });
@@ -143,44 +157,82 @@ app.get("/api/playlists", auth, async (req, res) => {
 // GET /api/playlists/mine  — current user's playlists
 app.get("/api/playlists/mine", auth, async (req, res) => {
   const [rows] = await pool.execute(
-    "SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC",
-    [req.user.id]
+    `SELECT p.*,
+            (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count,
+            (SELECT COUNT(*) FROM playlist_likes l WHERE l.playlist_id = p.id) AS like_count,
+            EXISTS(
+              SELECT 1 FROM playlist_likes l
+              WHERE l.playlist_id = p.id AND l.user_id = ?
+            ) AS liked_by_me
+     FROM playlists p
+     WHERE p.user_id = ?
+     ORDER BY p.created_at DESC`,
+    [req.user.id, req.user.id]
   );
+
   res.json(rows);
 });
 
 // GET /api/playlists/recommended  — SQL-based: match user goal -> category
 app.get("/api/playlists/recommended", auth, async (req, res) => {
-  const [[survey]] = await pool.execute("SELECT goal FROM surveys WHERE user_id = ?", [req.user.id]);
+  const [[survey]] = await pool.execute(
+    "SELECT goal FROM surveys WHERE user_id = ?",
+    [req.user.id]
+  );
+
   if (!survey) return res.json([]);
+
   const [rows] = await pool.execute(
-    `SELECT p.*, u.username FROM playlists p
+    `SELECT p.*, u.username,
+            (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count,
+            (SELECT COUNT(*) FROM playlist_likes l WHERE l.playlist_id = p.id) AS like_count,
+            EXISTS(
+              SELECT 1 FROM playlist_likes l
+              WHERE l.playlist_id = p.id AND l.user_id = ?
+            ) AS liked_by_me
+     FROM playlists p
      JOIN users u ON u.id = p.user_id
      WHERE p.is_public = 1 AND p.category = ? AND p.user_id != ?
-     ORDER BY p.created_at DESC LIMIT 10`,
-    [survey.goal, req.user.id]
+     ORDER BY p.created_at DESC
+     LIMIT 10`,
+    [req.user.id, survey.goal, req.user.id]
   );
+
   res.json(rows);
 });
 
 // GET /api/playlists/:id
 app.get("/api/playlists/:id", auth, async (req, res) => {
   const [[playlist]] = await pool.execute(
-    "SELECT p.*, u.username FROM playlists p JOIN users u ON u.id=p.user_id WHERE p.id=?",
-    [req.params.id]
+    `SELECT p.*, u.username,
+            (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count,
+            (SELECT COUNT(*) FROM playlist_likes l WHERE l.playlist_id = p.id) AS like_count,
+            EXISTS(
+              SELECT 1 FROM playlist_likes l
+              WHERE l.playlist_id = p.id AND l.user_id = ?
+            ) AS liked_by_me
+     FROM playlists p
+     JOIN users u ON u.id = p.user_id
+     WHERE p.id = ?`,
+    [req.user.id, req.params.id]
   );
+
   if (!playlist) return res.status(404).json({ error: "Not found" });
+
   const [steps] = await pool.execute(
-    "SELECT * FROM steps WHERE playlist_id=? ORDER BY position",
+    "SELECT * FROM steps WHERE playlist_id = ? ORDER BY position",
     [req.params.id]
   );
+
   const [comments] = await pool.execute(
-    `SELECT c.*, u.username FROM comments c
-     JOIN users u ON u.id=c.user_id
-     WHERE c.playlist_id=? AND c.flagged=0
+    `SELECT c.*, u.username
+     FROM comments c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.playlist_id = ? AND c.flagged = 0
      ORDER BY c.created_at ASC`,
     [req.params.id]
   );
+
   res.json({ ...playlist, steps, comments });
 });
 
@@ -336,10 +388,55 @@ app.get("/api/users/:id/following", auth, async (req, res) => {
 // GET /api/users/:id/playlists  — public playlists for a user profile
 app.get("/api/users/:id/playlists", auth, async (req, res) => {
   const [rows] = await pool.execute(
-    "SELECT * FROM playlists WHERE user_id=? AND is_public=1 ORDER BY created_at DESC",
+    `SELECT p.*,
+            (SELECT COUNT(*) FROM comments c WHERE c.playlist_id = p.id) AS comment_count,
+            (SELECT COUNT(*) FROM playlist_likes l WHERE l.playlist_id = p.id) AS like_count,
+            EXISTS(
+              SELECT 1 FROM playlist_likes l
+              WHERE l.playlist_id = p.id AND l.user_id = ?
+            ) AS liked_by_me
+     FROM playlists p
+     WHERE p.user_id = ? AND p.is_public = 1
+     ORDER BY p.created_at DESC`,
+    [req.user.id, req.params.id]
+  );
+
+  res.json(rows);
+});
+
+app.post("/api/playlists/:id/like", auth, async (req, res) => {
+  const [[playlist]] = await pool.execute(
+    "SELECT id FROM playlists WHERE id = ?",
     [req.params.id]
   );
-  res.json(rows);
+
+  if (!playlist) return res.status(404).json({ error: "Not found" });
+
+  await pool.execute(
+    "INSERT IGNORE INTO playlist_likes (playlist_id, user_id) VALUES (?, ?)",
+    [req.params.id, req.user.id]
+  );
+
+  const [[row]] = await pool.execute(
+    "SELECT COUNT(*) AS like_count FROM playlist_likes WHERE playlist_id = ?",
+    [req.params.id]
+  );
+
+  res.json({ ok: true, liked_by_me: true, like_count: row.like_count });
+});
+
+app.delete("/api/playlists/:id/like", auth, async (req, res) => {
+  await pool.execute(
+    "DELETE FROM playlist_likes WHERE playlist_id = ? AND user_id = ?",
+    [req.params.id, req.user.id]
+  );
+
+  const [[row]] = await pool.execute(
+    "SELECT COUNT(*) AS like_count FROM playlist_likes WHERE playlist_id = ?",
+    [req.params.id]
+  );
+
+  res.json({ ok: true, liked_by_me: false, like_count: row.like_count });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
