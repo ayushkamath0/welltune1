@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS comments (
   FOREIGN KEY (user_id)     REFERENCES users(id)     ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS playlist_likes (
+  playlist_id INT NOT NULL,
+  user_id     INT NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (playlist_id, user_id),
+  FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+
 -- Seed a demo user (password: demo1234)
 INSERT IGNORE INTO users (username, email, password) VALUES
   ('demo', 'demo@welltune.app', '$2b$10$X5oWMBfjf2f3LN3bCsjW2.7ywkVxLTXMU.h3jXkLjzR/kV1WIcZuG');
